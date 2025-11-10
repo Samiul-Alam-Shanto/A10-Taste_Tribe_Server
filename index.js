@@ -27,6 +27,33 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     await client.connect();
+    const db = client.db("taste_tribe_DB");
+    const reviewCollection = db.collection("reviews");
+
+    // review api's
+
+    app.post("/reviews", async (req, res) => {
+      const newReview = req.body;
+      newReview.postedDate = new Date().toISOString();
+      const result = await reviewCollection.insertOne(newReview);
+      res.send(result);
+    });
+
+    app.get("/all-reviews", async (req, res) => {
+      const cursor = reviewCollection.find().sort({ postedDate: -1 });
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
+    app.get("/featured-products", async (req, res) => {
+      const cursor = reviewCollection
+        .find()
+        .sort({ rating: -1 }, { postedDate: -1 })
+        .limit(6);
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
