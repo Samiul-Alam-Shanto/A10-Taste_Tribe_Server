@@ -40,7 +40,11 @@ async function run() {
     });
 
     app.get("/all-reviews", async (req, res) => {
-      const cursor = reviewCollection.find().sort({ postedDate: -1 });
+      let query = {};
+      if (req.query.search) {
+        query = { foodName: { $regex: req.query.search, $options: "i" } };
+      }
+      const cursor = reviewCollection.find(query).sort({ postedDate: -1 });
       const result = await cursor.toArray();
       res.send(result);
     });
@@ -48,7 +52,7 @@ async function run() {
     app.get("/featured-products", async (req, res) => {
       const cursor = reviewCollection
         .find()
-        .sort({ rating: -1 }, { postedDate: -1 })
+        .sort({ rating: -1 }, { postedDate: 1 })
         .limit(6);
       const result = await cursor.toArray();
       res.send(result);
