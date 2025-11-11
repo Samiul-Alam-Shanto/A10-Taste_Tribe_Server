@@ -34,7 +34,8 @@ async function run() {
 
     app.post("/reviews", async (req, res) => {
       const newReview = req.body;
-      newReview.postedDate = new Date().toISOString();
+      newReview.rating = parseInt(newReview.rating, 10);
+      newReview.postedDate = new Date();
       const result = await reviewCollection.insertOne(newReview);
       res.send(result);
     });
@@ -49,11 +50,8 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/featured-products", async (req, res) => {
-      const cursor = reviewCollection
-        .find()
-        .sort({ rating: -1 }, { postedDate: -1 })
-        .limit(6);
+    app.get("/featured-reviews", async (req, res) => {
+      const cursor = reviewCollection.find().sort({ rating: -1 }).limit(6);
       const result = await cursor.toArray();
       res.send(result);
     });
