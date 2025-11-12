@@ -95,16 +95,29 @@ async function run() {
 
     app.post("/favorite-reviews", async (req, res) => {
       const newFavoriteReview = req.body;
-      const { reviewerEmail, reviewId } = newFavoriteReview;
+      const { userEmail, reviewId } = newFavoriteReview;
       const exist = await favoriteReviewsCollection.findOne({
         reviewId,
-        reviewerEmail,
+        userEmail,
       });
       if (exist) {
         return res.status(409).send({ message: "Already in favorites." });
       }
       newFavoriteReview.add_date = new Date();
       const result = favoriteReviewsCollection.insertOne(newFavoriteReview);
+      res.send(result);
+    });
+
+    app.get("/my-favorite-reviews", async (req, res) => {
+      const email = req.query.email;
+      const query = {};
+      if (email) {
+        query.userEmail = email;
+      }
+      const cursor = favoriteReviewsCollection
+        .find(query)
+        .sort({ add_date: -1 });
+      const result = await cursor.toArray();
       res.send(result);
     });
 
