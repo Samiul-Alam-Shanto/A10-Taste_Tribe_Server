@@ -29,6 +29,7 @@ async function run() {
     await client.connect();
     const db = client.db("taste_tribe_DB");
     const reviewCollection = db.collection("reviews");
+    const favoriteReviewsCollection = db.collection("Favorite_Reviews");
 
     // review api's
 
@@ -87,6 +88,23 @@ async function run() {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await reviewCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    // Favorite Review APi's
+
+    app.post("/favorite-reviews", async (req, res) => {
+      const newFavoriteReview = req.body;
+      const { reviewerEmail, reviewId } = newFavoriteReview;
+      const exist = await favoriteReviewsCollection.findOne({
+        reviewId,
+        reviewerEmail,
+      });
+      if (exist) {
+        return res.status(409).send({ message: "Already in favorites." });
+      }
+      newFavoriteReview.add_date = new Date();
+      const result = favoriteReviewsCollection.insertOne(newFavoriteReview);
       res.send(result);
     });
 
