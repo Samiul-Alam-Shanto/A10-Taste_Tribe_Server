@@ -86,9 +86,16 @@ async function run() {
 
     app.delete("/reviews/:id", async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await reviewCollection.deleteOne(query);
-      res.send(result);
+      const reviewQuery = { _id: new ObjectId(id) };
+      const favReviewQuery = { reviewId: id };
+      const deleteReviewResult = await reviewCollection.deleteOne(reviewQuery);
+      const deleteFavReviewResult = await favoriteReviewsCollection.deleteOne(
+        favReviewQuery
+      );
+      res.send({
+        reviewDeleteInfo: deleteReviewResult,
+        favReviewDeleteInfo: deleteFavReviewResult,
+      });
     });
 
     // Favorite Review APi's
