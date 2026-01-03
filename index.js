@@ -38,18 +38,6 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
-const verifyAdmin = async (req, res, next) => {
-  const email = req.token_email;
-
-  const query = { email: email };
-  const user = await usersCollection.findOne(query);
-
-  if (user?.role !== "admin") {
-    return res.status(403).send({ message: "forbidden access" });
-  }
-  next();
-};
-
 app.get("/", (req, res) => {
   res.send("Taste tribe Server is Running");
 });
@@ -73,6 +61,20 @@ async function run() {
     const reviewCollection = db.collection("reviews");
     const favoriteReviewsCollection = db.collection("Favorite_Reviews");
     const usersCollection = db.collection("users");
+
+    //verify admin
+    const verifyAdmin = async (req, res, next) => {
+      // console.log(req);
+      const email = req.token_email;
+
+      const query = { email: email };
+      const user = await usersCollection.findOne(query);
+
+      if (user?.role !== "admin") {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+      next();
+    };
 
     //users api's
 
@@ -128,6 +130,16 @@ async function run() {
       verifyAdmin,
       async (req, res) => {
         const id = req.params.id;
+
+        const userToDelete = await usersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (req.token_email === userToDelete.email) {
+          return res
+            .status(400)
+            .send({ message: "Admin cannot delete their own account." });
+        }
+
         const query = { _id: new ObjectId(id) };
         const result = await usersCollection.deleteOne(query);
         res.send(result);
@@ -244,6 +256,113 @@ async function run() {
         res.send(result);
       }
     );
+
+    //! ADMIN Aggregations & API"S
+
+    app.get(
+      "/admin/all-reviews",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await reviewCollection
+          .find()
+          .sort({ postedDate: -1 })
+          .toArray();
+        res.send(result);
+      }
+    );
+
+    app.patch(
+      "/admin/reviews/:id",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+        const updateReview = req.body;
+        const query = { _id: new ObjectId(id) };
+        const update = { $set: updateReview };
+        const result = await reviewCollection.updateOne(query, update);
+        res.send(result);
+      }
+    );
+
+    app.delete(
+      "/reviews/:id",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+
+        // The original review to be deleted
+        const reviewQuery = { _id: new ObjectId(id) };
+        const deleteReviewResult = await reviewCollection.deleteOne(
+          reviewQuery
+        );
+
+        // Also delete any favorites associated with this reviewId
+        const favReviewQuery = { reviewId: id };
+        const deleteFavReviewResult =
+          await favoriteReviewsCollection.deleteMany(favReviewQuery); // Use deleteMany in case multiple users favorited it
+
+        res.send({
+          reviewDeleteInfo: deleteReviewResult,
+          favReviewDeleteInfo: deleteFavReviewResult,
+        });
+      }
+    );
+
+    app.get(
+      "/admin-stats",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const userCount = await usersCollection.countDocuments();
+          const reviewCount = await reviewCollection.countDocuments();
+          // will add stats here later
+          res.send({ userCount, reviewCount });
+        } catch (error) {
+          res
+            .status(500)
+            .send({ message: "Failed to fetch admin statistics." });
+        }
+      }
+    );
+
+    app.get("/user-stats", verifyFirebaseToken, async (req, res) => {
+      const email = req.query.email;
+
+      if (req.token_email !== email) {
+        return res
+          .status(403)
+          .send({ message: "Forbidden: You can only access your own stats." });
+      }
+
+      try {
+        const query = { reviewerEmail: email };
+
+        const reviewCount = await reviewCollection.countDocuments(query);
+
+        const favoriteCount = await favoriteReviewsCollection.countDocuments({
+          userEmail: email,
+        });
+
+        const recentReviews = await reviewCollection
+          .find(query)
+          .sort({ postedDate: -1 })
+          .limit(3)
+          .toArray();
+
+        res.send({
+          reviewCount,
+          favoriteCount,
+          recentReviews,
+        });
+      } catch (error) {
+        console.error("Error fetching user stats:", error);
+        res.status(500).send({ message: "Failed to fetch user statistics." });
+      }
+    });
 
     // await client.db("admin").command({ ping: 1 });
     // console.log(
