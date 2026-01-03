@@ -123,6 +123,30 @@ async function run() {
       }
     );
 
+    app.patch(
+      "/users/user/:id",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const id = req.params.id;
+
+        // Safety Check: Prevent an admin from demoting their own account
+        const userToDemote = await usersCollection.findOne({
+          _id: new ObjectId(id),
+        });
+        if (req.token_email === userToDemote?.email) {
+          return res
+            .status(400)
+            .send({ message: "Admin cannot change their own role." });
+        }
+
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = { $set: { role: "user" } };
+        const result = await usersCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+      }
+    );
+
     // DELETE a user (admin)
     app.delete(
       "/users/:id",
@@ -157,13 +181,45 @@ async function run() {
     });
 
     app.get("/all-reviews", async (req, res) => {
-      let query = {};
-      if (req.query.search) {
-        query = { foodName: { $regex: req.query.search, $options: "i" } };
+      try {
+        const {
+          search = "",
+          rating = 0,
+          sort = "newest",
+          page = 1,
+          limit = 9,
+        } = req.query;
+
+        const filterQuery = {};
+        if (search) {
+          filterQuery.foodName = { $regex: search, $options: "i" };
+        }
+        if (Number(rating) > 0) {
+          filterQuery.rating = { $gte: Number(rating) };
+        }
+        let sortQuery = {};
+        if (sort === "highest_rated") {
+          sortQuery = { rating: -1, postedDate: -1 };
+        } else {
+          sortQuery = { postedDate: -1 };
+        }
+
+        const totalCount = await reviewCollection.countDocuments(filterQuery);
+        const reviews = await reviewCollection
+          .find(filterQuery)
+          .sort(sortQuery)
+          .skip((Number(page) - 1) * Number(limit))
+          .limit(Number(limit))
+          .toArray();
+
+        res.send({
+          reviews,
+          totalCount,
+        });
+      } catch (error) {
+        console.error("Error fetching all reviews:", error);
+        res.status(500).send({ message: "Failed to fetch reviews." });
       }
-      const cursor = reviewCollection.find(query).sort({ postedDate: -1 });
-      const result = await cursor.toArray();
-      res.send(result);
     });
 
     app.get("/featured-reviews", async (req, res) => {
@@ -172,7 +228,7 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/reviews/:id", verifyFirebaseToken, async (req, res) => {
+    app.get("/reviews/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await reviewCollection.findOne(query);
