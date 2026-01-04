@@ -5,6 +5,7 @@ const cors = require("cors");
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const port = process.env.PORT || 3000;
 const admin = require("firebase-admin");
+const stripe = require("stripe")(process.env.STRIPE_SECRET_KEY);
 
 let serviceAccount;
 try {
@@ -110,6 +111,29 @@ async function run() {
       res.send(user);
     });
 
+    app.patch("/users/:email", verifyFirebaseToken, async (req, res) => {
+      const email = req.params.email;
+      const user = req.body;
+
+      // 1. Security Check: Ensure the requester is updating their own profile
+      if (email !== req.token_email) {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+
+      const query = { email: email };
+      const updatedDoc = {
+        $set: {
+          name: user.name,
+          photoURL: user.photoURL,
+          // We can also add a timestamp if you want
+          lastUpdated: new Date(),
+        },
+      };
+
+      const result = await usersCollection.updateOne(query, updatedDoc);
+      res.send(result);
+    });
+
     app.patch(
       "/users/admin/:id",
       verifyFirebaseToken,
@@ -130,7 +154,6 @@ async function run() {
       async (req, res) => {
         const id = req.params.id;
 
-        // Safety Check: Prevent an admin from demoting their own account
         const userToDemote = await usersCollection.findOne({
           _id: new ObjectId(id),
         });
@@ -223,7 +246,7 @@ async function run() {
     });
 
     app.get("/featured-reviews", async (req, res) => {
-      const cursor = reviewCollection.find().sort({ rating: -1 }).limit(6);
+      const cursor = reviewCollection.find().sort({ rating: -1 }).limit(8);
       const result = await cursor.toArray();
       res.send(result);
     });
@@ -375,49 +398,165 @@ async function run() {
         try {
           const userCount = await usersCollection.countDocuments();
           const reviewCount = await reviewCollection.countDocuments();
-          // will add stats here later
-          res.send({ userCount, reviewCount });
+          const favoriteCount =
+            await favoriteReviewsCollection.countDocuments();
+
+          // Aggregation for monthly reviews
+          const monthlyReviews = await reviewCollection
+            .aggregate([
+              {
+                $group: {
+                  _id: {
+                    year: { $year: "$postedDate" },
+                    month: { $month: "$postedDate" },
+                  },
+                  count: { $sum: 1 },
+                },
+              },
+              { $sort: { "_id.year": 1, "_id.month": 1 } },
+              {
+                $project: {
+                  _id: 0,
+                  month: {
+                    $concat: [
+                      { $toString: "$_id.year" },
+                      "-",
+                      { $toString: "$_id.month" },
+                    ],
+                  },
+                  count: 1,
+                },
+              },
+            ])
+            .toArray();
+
+          // Aggregation for review distribution by rating
+          const ratingDistribution = await reviewCollection
+            .aggregate([
+              { $group: { _id: "$rating", count: { $sum: 1 } } },
+              { $sort: { _id: 1 } },
+              {
+                $project: {
+                  _id: 0,
+                  name: { $concat: [{ $toString: "$_id" }, " Star"] },
+                  value: "$count",
+                },
+              },
+            ])
+            .toArray();
+
+          res.send({
+            userCount,
+            reviewCount,
+            favoriteCount,
+            monthlyReviews,
+            ratingDistribution,
+          });
         } catch (error) {
-          res
-            .status(500)
-            .send({ message: "Failed to fetch admin statistics." });
+          res.status(500).send({ message: "Failed to fetch admin stats." });
         }
       }
     );
 
     app.get("/user-stats", verifyFirebaseToken, async (req, res) => {
       const email = req.query.email;
-
-      if (req.token_email !== email) {
-        return res
-          .status(403)
-          .send({ message: "Forbidden: You can only access your own stats." });
-      }
+      if (req.token_email !== email)
+        return res.status(403).send({ message: "Forbidden access." });
 
       try {
-        const query = { reviewerEmail: email };
-
-        const reviewCount = await reviewCollection.countDocuments(query);
-
+        const reviewCount = await reviewCollection.countDocuments({
+          reviewerEmail: email,
+        });
         const favoriteCount = await favoriteReviewsCollection.countDocuments({
           userEmail: email,
         });
-
         const recentReviews = await reviewCollection
-          .find(query)
+          .find({ reviewerEmail: email })
           .sort({ postedDate: -1 })
           .limit(3)
+          .toArray();
+
+        // Aggregation for the user's personal rating distribution
+        const userRatingDistribution = await reviewCollection
+          .aggregate([
+            { $match: { reviewerEmail: email } },
+            { $group: { _id: "$rating", count: { $sum: 1 } } },
+            { $sort: { _id: 1 } },
+            {
+              $project: {
+                _id: 0,
+                name: { $concat: [{ $toString: "$_id" }, " Star"] },
+                value: "$count",
+              },
+            },
+          ])
           .toArray();
 
         res.send({
           reviewCount,
           favoriteCount,
           recentReviews,
+          userRatingDistribution,
         });
       } catch (error) {
-        console.error("Error fetching user stats:", error);
-        res.status(500).send({ message: "Failed to fetch user statistics." });
+        res.status(500).send({ message: "Failed to fetch user stats." });
       }
+    });
+
+    //? PAYMENT API"s
+    app.post(
+      "/create-payment-intent",
+      verifyFirebaseToken,
+      async (req, res) => {
+        const { packageName } = req.body;
+
+        const prices = {
+          taster: 499,
+          foodie: 999,
+          gourmet: 1999,
+        };
+
+        const amount = prices[packageName?.toLowerCase()];
+        if (!amount) {
+          return res.status(400).send({ message: "Invalid Package Selected" });
+        }
+
+        try {
+          const paymentIntent = await stripe.paymentIntents.create({
+            amount: amount,
+            currency: "usd",
+            payment_method_types: ["card"],
+            metadata: {
+              user_email: req.token_email,
+              package: packageName,
+            },
+          });
+
+          res.send({
+            clientSecret: paymentIntent.client_secret,
+          });
+        } catch (error) {
+          console.error(error);
+          res.status(500).send({ message: "Failed to create payment intent." });
+        }
+      }
+    );
+
+    // user's role AFTER payment
+    app.patch("/users/make-premium", verifyFirebaseToken, async (req, res) => {
+      const email = req.token_email;
+      const { package: packageName } = req.body; // Receive package name from frontend
+
+      const filter = { email: email };
+      const updatedDoc = {
+        $set: {
+          role: "premium",
+          package: packageName || "Premium", // Store specific package (e.g., "Gourmet")
+        },
+      };
+
+      const result = await usersCollection.updateOne(filter, updatedDoc);
+      res.send(result);
     });
 
     // await client.db("admin").command({ ping: 1 });
